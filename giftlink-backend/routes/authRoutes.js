@@ -1,50 +1,55 @@
-/*jshint esversion: 8 */
-require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const pinoLogger = require('./logger');
-
-const connectToDatabase = require('./models/db');
-const {loadData} = require("./util/import-mongo/index");
-
-
 const app = express();
-app.use("*",cors());
-const port = 3060;
+const bcryptjs = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { body, validationResult } = require('express-validator');
+const connectToDatabase = require('../models/db');
+const router = express.Router();
+const dotenv = require('dotenv');
+const pino = require('pino');  // Import Pino logger
 
-// Connect to MongoDB; we just do this one time
-connectToDatabase().then(() => {
-    pinoLogger.info('Connected to DB');
-})
-    .catch((e) => console.error('Failed to connect to DB', e));
+const logger = pino();  // Create a Pino logger instance
 
+dotenv.config();
 
-app.use(express.json());
+const JWT_SECRET = process.env.JWT_SECRET;
 
-// Route files
-const giftRoutes = require('./routes/giftRoutes');
-const authRoutes = require('./routes/authRoutes');
-const searchRoutes = require('./routes/searchRoutes');
-const pinoHttp = require('pino-http');
-const logger = require('./logger');
+router.post('/register', async (req, res) => {
+    try {
+        // Task 1: Connect to `giftsdb` in MongoDB through `connectToDatabase` in `db.js`
+        const db = await connectToDatabase();
 
-app.use(pinoHttp({ logger }));
+        // Task 2: Access MongoDB collection
+        const collection = db.collection("users");
 
-// Use Routes
-app.use('/api/gifts', giftRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/search', searchRoutes);
+		//Task 3: Check for existing email
+        const existingEmail = await collection.findOne({ email: req.body.email });
 
-// Global Error Handler
-app.use((err, req, res, next) => {
-    console.error(err);
-    res.status(500).send('Internal Server Error');
+		const salt = await bcryptjs.genSalt(10);
+        const hash = await bcryptjs.hash(req.body.password, salt);
+		const email = req.body.email;
+
+		//Task 4: Save user details in database
+        const newUser = await collection.insertOne({
+            email: req.body.email,
+            firstName: req.body.firstName,
+            lastName: req.body.lastName,
+            password: hash,
+            createdAt: new Date(),
+        });
+
+        const payload = {
+            user: {
+                id: newUser.insertedId,
+            },
+        };
+
+        const authtoken = jwt.sign(payload, JWT_SECRET);
+        logger.info('User registered successfully');
+        res.json({authtoken,email});
+    } catch (e) {
+         return res.status(500).send('Internal server error');
+    }
 });
 
-app.get("/",(req,res)=>{
-    res.send("Inside the server")
-})
-
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-});
+module.exports = router;
